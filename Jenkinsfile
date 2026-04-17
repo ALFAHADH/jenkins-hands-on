@@ -32,10 +32,9 @@ pipeline {
 
                 echo "==== INSTALLING REQUIRED PACKAGES ===="
 
-                # Update package list once
                 sudo apt update
 
-                # Install python venv if missing
+                # python venv
                 if ! python3 -m venv testenv 2>/dev/null; then
                     echo "[FIX] Installing python3-venv..."
                     sudo apt install -y python3-venv
@@ -44,7 +43,7 @@ pipeline {
                 fi
                 rm -rf testenv
 
-                # Install zip if missing
+                # zip
                 if ! command -v zip >/dev/null 2>&1; then
                     echo "[FIX] Installing zip..."
                     sudo apt install -y zip
@@ -88,7 +87,7 @@ pipeline {
         }
 
         // ─────────────────────────────
-        // STAGE 5: DEPLOY
+        // STAGE 5: DEPLOY (UPDATED)
         // ─────────────────────────────
         stage('Deploy') {
             steps {
@@ -96,25 +95,29 @@ pipeline {
 
                 sshagent(credentials: [SSH_CRED_ID]) {
 
+                    // Create directory with sudo
                     sh """
                     echo "Creating directory on remote server..."
                     ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST} \
-                    'mkdir -p ${DEPLOY_DIR}'
+                    'sudo mkdir -p ${DEPLOY_DIR} && sudo chown -R ${DEPLOY_USER}:${DEPLOY_USER} ${DEPLOY_DIR}'
                     """
 
+                    // Copy files
                     sh """
                     echo "Copying files to server..."
                     scp -o StrictHostKeyChecking=no -r app/ scripts/ requirements.txt \
                     ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/
                     """
 
+                    // Run deploy script
                     sh """
                     echo "Running deploy script..."
                     ssh -o StrictHostKeyChecking=no \
                     ${DEPLOY_USER}@${DEPLOY_HOST} \
-                    'cd ${DEPLOY_DIR} && chmod +x scripts/deploy.sh && bash scripts/deploy.sh'
+                    'cd ${DEPLOY_DIR} && chmod +x scripts/deploy.sh && sudo bash scripts/deploy.sh'
                     """
 
+                    // Health check
                     sh """
                     echo "Verifying deployment..."
                     ssh -o StrictHostKeyChecking=no \
