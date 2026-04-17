@@ -7,9 +7,9 @@ pipeline {
     environment {
         APP_NAME    = 'my-jenkins-app'
         DEPLOY_USER = 'deployuser'
-        DEPLOY_HOST = '<EC2_2_PRIVATE_IP>'   // ← change this
+        DEPLOY_HOST = '172.31.12.148'   // ← change this
         DEPLOY_DIR  = '/opt/myapp'
-        SSH_CRED_ID = 'deploy-server-ssh'   // matches credential ID you created
+        SSH_CRED_ID = 'deployuser'   // matches credential ID you created
     }
 
     stages {
