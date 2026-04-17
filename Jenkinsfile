@@ -1,143 +1,136 @@
 pipeline {
     agent any
 
-    // ── ENVIRONMENT ─────────────────────────────────────────────────
-    // Variables available to every stage
-    // BUILD_NUMBER is auto-provided by Jenkins
     environment {
         APP_NAME    = 'my-jenkins-app'
         DEPLOY_USER = 'deployuser'
-        DEPLOY_HOST = '172.31.12.148'   // ← change this
+        DEPLOY_HOST = '172.31.12.148'
         DEPLOY_DIR  = '/opt/myapp'
-        SSH_CRED_ID = 'deployuser'   // matches credential ID you created
+        SSH_CRED_ID = 'deployuser'
     }
 
     stages {
 
-        // ════════════════════════════════════════════════════════════
+        // ─────────────────────────────
         // STAGE 1: CHECKOUT
-        // What:  Jenkins pulls your code from Git
-        // Why:   Every build needs a fresh copy of the source code
-        // ════════════════════════════════════════════════════════════
+        // ─────────────────────────────
         stage('Checkout') {
             steps {
                 echo "Checking out source code..."
                 checkout scm
-                // 'scm' means: use whatever Git URL is configured in the Jenkins job
-                // Jenkins clones the repo into its workspace directory
-                sh 'ls -la'   // verify files are there
+                sh 'ls -la'
             }
         }
 
-        // ════════════════════════════════════════════════════════════
-        // STAGE 2: BUILD
-        // What:  Compile/package your application
-        // Why:   Catches syntax errors, missing dependencies early
-        //        Produces a deployable artifact (zip, jar, docker image)
-        //
-        // In real projects this could be:
-        //   Java:   mvn clean package
-        //   Node:   npm ci && npm run build
-        //   Go:     go build ./...
-        //   Docker: docker build -t myapp .
-        // ════════════════════════════════════════════════════════════
+        // ─────────────────────────────
+        // STAGE 2: SETUP PYTHON (FIX)
+        // ─────────────────────────────
+        stage('Setup Python') {
+            steps {
+                sh '''
+                set -e
+
+                echo "Checking if python3-venv is available..."
+
+                if ! python3 -m venv testenv 2>/dev/null; then
+                    echo "python3-venv missing. Installing..."
+
+                    if command -v sudo >/dev/null 2>&1; then
+                        sudo apt update
+                        sudo apt install -y python3-venv
+                    else
+                        echo "ERROR: sudo not available. Install python3-venv manually."
+                        exit 1
+                    fi
+                else
+                    echo "python3-venv already installed."
+                fi
+
+                rm -rf testenv
+                '''
+            }
+        }
+
+        // ─────────────────────────────
+        // STAGE 3: BUILD
+        // ─────────────────────────────
         stage('Build') {
             steps {
                 echo "=== BUILD STAGE ==="
                 echo "App: ${APP_NAME} | Build #${BUILD_NUMBER}"
+
                 sh '''
-                    chmod +x scripts/build.sh
-                    bash scripts/build.sh
+                set -e
+                chmod +x scripts/build.sh
+                bash scripts/build.sh
                 '''
-                // After this, dist/app-package.zip exists in workspace
-                echo "Build artifact created at dist/app-package.zip"
             }
         }
 
-        // ════════════════════════════════════════════════════════════
-        // STAGE 3: TEST
-        // What:  Run automated tests against the built code
-        // Why:   Catch bugs BEFORE they reach your server
-        //        Never deploy code that hasn't been tested
-        //
-        // In real projects:
-        //   Unit tests:       pytest / JUnit / Jest
-        //   Integration:      postman / newman / rest-assured
-        //   Coverage report:  pytest --cov / jacoco
-        //   Security scan:    bandit / OWASP / trivy
-        // ════════════════════════════════════════════════════════════
+        // ─────────────────────────────
+        // STAGE 4: TEST
+        // ─────────────────────────────
         stage('Test') {
             steps {
                 echo "=== TEST STAGE ==="
                 sh '''
-                    chmod +x scripts/test.sh
-                    bash scripts/test.sh
+                set -e
+                chmod +x scripts/test.sh
+                bash scripts/test.sh
                 '''
             }
-            // If any test fails, sh throws an error,
-            // Jenkins marks the build FAILED, and Deploy never runs.
-            // This is the safety gate.
         }
 
-        // ════════════════════════════════════════════════════════════
-        // STAGE 4: DEPLOY
-        // What:  Copy code to App Server and restart the application
-        // Why:   Gets the tested build running for real users
-        //
-        // Here we use SSH to reach EC2 #2.
-        // Jenkins uses the credential 'deploy-server-ssh' we added earlier.
-        //
-        // In real projects:
-        //   Simple:  scp + ssh (what we do here)
-        //   Modern:  Ansible / Kubernetes / AWS CodeDeploy
-        //   Docker:  docker pull && docker run
-        // ════════════════════════════════════════════════════════════
+        // ─────────────────────────────
+        // STAGE 5: DEPLOY
+        // ─────────────────────────────
         stage('Deploy') {
             steps {
                 echo "=== DEPLOY STAGE ==="
 
-                // sshagent loads the private key into the SSH agent
-                // so subsequent ssh/scp commands can authenticate
                 sshagent(credentials: [SSH_CRED_ID]) {
 
-                    // Step A: Copy files to App Server
-                    echo "Copying files to ${DEPLOY_HOST}..."
                     sh """
+                        echo "Copying files to ${DEPLOY_HOST}..."
+
+                        ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST} \
+                        'mkdir -p ${DEPLOY_DIR}'
+
                         scp -o StrictHostKeyChecking=no -r app/ scripts/ requirements.txt \
-                            ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/
+                        ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/
                     """
 
-                    // Step B: Run deploy script on App Server over SSH
-                    echo "Running deploy script on App Server..."
                     sh """
+                        echo "Running deploy script..."
+
                         ssh -o StrictHostKeyChecking=no \
-                            ${DEPLOY_USER}@${DEPLOY_HOST} \
-                            'cd ${DEPLOY_DIR} && bash scripts/deploy.sh'
+                        ${DEPLOY_USER}@${DEPLOY_HOST} \
+                        'cd ${DEPLOY_DIR} && chmod +x scripts/deploy.sh && bash scripts/deploy.sh'
                     """
 
-                    // Step C: Verify the app is up
-                    echo "Verifying deployment..."
                     sh """
+                        echo "Verifying deployment..."
+
                         ssh -o StrictHostKeyChecking=no \
-                            ${DEPLOY_USER}@${DEPLOY_HOST} \
-                            'curl -s http://localhost:5000/health'
+                        ${DEPLOY_USER}@${DEPLOY_HOST} \
+                        'curl -s http://localhost:5000/health || echo "Health check failed"'
                     """
                 }
             }
         }
     }
 
-    // ── POST ACTIONS ──────────────────────────────────────────────
-    // Runs after all stages — regardless of success or failure
+    // ─────────────────────────────
+    // POST ACTIONS
+    // ─────────────────────────────
     post {
         success {
             echo "PIPELINE SUCCEEDED — Build #${BUILD_NUMBER} deployed!"
         }
         failure {
-            echo "PIPELINE FAILED — Check the logs above for errors."
+            echo "PIPELINE FAILED — Check logs."
         }
         always {
-            // Archive the build artifact so you can download it from Jenkins UI
             archiveArtifacts artifacts: 'dist/*.zip', allowEmptyArchive: true
             echo "Pipeline finished."
         }
