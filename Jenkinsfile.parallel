@@ -1,0 +1,90 @@
+pipeline {
+    agent any
+
+    environment {
+        DEPLOY_USER = 'deployuser'
+        DEPLOY_HOST = '13.201.101.214'
+        SSH_CRED_ID = 'deploy-server-ssh'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'bash scripts/build.sh'
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // PARALLEL STAGE
+        // All three inner stages run at the SAME TIME on the same agent
+        // Total time = slowest stage (not sum of all)
+        //
+        // Benefit: If unit tests take 2 min, lint takes 1 min, and
+        // security scan takes 2 min — sequentially = 5 min total.
+        // In parallel = 2 min total.
+        // ════════════════════════════════════════════════════════════
+        stage('Test & Validate (parallel)') {
+            parallel {
+
+                stage('Unit tests') {
+                    steps {
+                        echo "Running unit tests..."
+                        sh '''
+                            source venv/bin/activate
+                            python3 -m pytest tests/ -v
+                        '''
+                    }
+                }
+
+                stage('Syntax check') {
+                    steps {
+                        echo "Checking Python syntax..."
+                        sh '''
+                            source venv/bin/activate
+                            python3 -m py_compile app/app.py
+                            echo "Syntax OK"
+                        '''
+                    }
+                }
+
+                stage('Dependency audit') {
+                    steps {
+                        echo "Auditing dependencies..."
+                        sh '''
+                            source venv/bin/activate
+                            pip list --outdated || true
+                            echo "Audit complete"
+                        '''
+                    }
+                }
+            }
+            // All three must pass. If any fails, Deploy is skipped.
+        }
+
+        stage('Deploy') {
+            steps {
+                sshagent(credentials: [SSH_CRED_ID]) {
+                    sh """
+                        scp -o StrictHostKeyChecking=no -r app/ scripts/ requirements.txt \
+                            ${DEPLOY_USER}@${DEPLOY_HOST}:/opt/myapp/
+                        ssh -o StrictHostKeyChecking=no \
+                            ${DEPLOY_USER}@${DEPLOY_HOST} \
+                            'cd /opt/myapp && bash scripts/deploy.sh'
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success { echo "All parallel tests passed — deployed!" }
+        failure { echo "One or more parallel stages failed." }
+    }
+}
