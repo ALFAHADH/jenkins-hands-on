@@ -54,3 +54,92 @@ pipeline {
             }
         }
 
+        // ════════════════════════════════════════════════════════════
+        // STAGE 3: TEST
+        // What:  Run automated tests against the built code
+        // Why:   Catch bugs BEFORE they reach your server
+        //        Never deploy code that hasn't been tested
+        //
+        // In real projects:
+        //   Unit tests:       pytest / JUnit / Jest
+        //   Integration:      postman / newman / rest-assured
+        //   Coverage report:  pytest --cov / jacoco
+        //   Security scan:    bandit / OWASP / trivy
+        // ════════════════════════════════════════════════════════════
+        stage('Test') {
+            steps {
+                echo "=== TEST STAGE ==="
+                sh '''
+                    chmod +x scripts/test.sh
+                    bash scripts/test.sh
+                '''
+            }
+            // If any test fails, sh throws an error,
+            // Jenkins marks the build FAILED, and Deploy never runs.
+            // This is the safety gate.
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // STAGE 4: DEPLOY
+        // What:  Copy code to App Server and restart the application
+        // Why:   Gets the tested build running for real users
+        //
+        // Here we use SSH to reach EC2 #2.
+        // Jenkins uses the credential 'deploy-server-ssh' we added earlier.
+        //
+        // In real projects:
+        //   Simple:  scp + ssh (what we do here)
+        //   Modern:  Ansible / Kubernetes / AWS CodeDeploy
+        //   Docker:  docker pull && docker run
+        // ════════════════════════════════════════════════════════════
+        stage('Deploy') {
+            steps {
+                echo "=== DEPLOY STAGE ==="
+
+                // sshagent loads the private key into the SSH agent
+                // so subsequent ssh/scp commands can authenticate
+                sshagent(credentials: [SSH_CRED_ID]) {
+
+                    // Step A: Copy files to App Server
+                    echo "Copying files to ${DEPLOY_HOST}..."
+                    sh """
+                        scp -o StrictHostKeyChecking=no -r app/ scripts/ requirements.txt \
+                            ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/
+                    """
+
+                    // Step B: Run deploy script on App Server over SSH
+                    echo "Running deploy script on App Server..."
+                    sh """
+                        ssh -o StrictHostKeyChecking=no \
+                            ${DEPLOY_USER}@${DEPLOY_HOST} \
+                            'cd ${DEPLOY_DIR} && bash scripts/deploy.sh'
+                    """
+
+                    // Step C: Verify the app is up
+                    echo "Verifying deployment..."
+                    sh """
+                        ssh -o StrictHostKeyChecking=no \
+                            ${DEPLOY_USER}@${DEPLOY_HOST} \
+                            'curl -s http://localhost:5000/health'
+                    """
+                }
+            }
+        }
+    }
+
+    // ── POST ACTIONS ──────────────────────────────────────────────
+    // Runs after all stages — regardless of success or failure
+    post {
+        success {
+            echo "PIPELINE SUCCEEDED — Build #${BUILD_NUMBER} deployed!"
+        }
+        failure {
+            echo "PIPELINE FAILED — Check the logs above for errors."
+        }
+        always {
+            // Archive the build artifact so you can download it from Jenkins UI
+            archiveArtifacts artifacts: 'dist/*.zip', allowEmptyArchive: true
+            echo "Pipeline finished."
+        }
+    }
+}
