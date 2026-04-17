@@ -2,6 +2,8 @@
 set -e
 
 APP_DIR="/opt/myapp"
+LOG_FILE="$APP_DIR/myapp.log"
+PID_FILE="$APP_DIR/myapp.pid"
 
 echo "============================================"
 echo "  DEPLOY STAGE"
@@ -22,21 +24,34 @@ rm -rf testenv
 echo "[2/5] Creating app directory..."
 mkdir -p $APP_DIR
 
-echo "[3/5] Installing dependencies..."
+echo "[3/5] Setting up virtual environment..."
 cd $APP_DIR
 
-python3 -m venv venv
-source venv/bin/activate
+# Create venv if not exists
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+fi
 
-pip install --upgrade pip --quiet
-pip install flask --quiet
+# Install dependencies without activating
+venv/bin/pip install --upgrade pip --quiet
+venv/bin/pip install flask --quiet
 
 echo "[4/5] Restarting application..."
-pkill -f "python3.*app.py" 2>/dev/null || true
-sleep 1
 
-nohup python3 app/app.py > /tmp/myapp.log 2>&1 &
-echo $! > /tmp/myapp.pid
+# Stop existing app if running
+if [ -f "$PID_FILE" ]; then
+    OLD_PID=$(cat $PID_FILE)
+    if ps -p $OLD_PID > /dev/null 2>&1; then
+        echo "Stopping existing app (PID $OLD_PID)..."
+        kill $OLD_PID || true
+        sleep 1
+    fi
+fi
+
+# Start new app
+echo "Starting application..."
+nohup venv/bin/python app/app.py > $LOG_FILE 2>&1 &
+echo $! > $PID_FILE
 
 echo "[5/5] Verifying deployment..."
 sleep 2
@@ -44,7 +59,7 @@ sleep 2
 if curl -s http://localhost:5000/health | grep -q "healthy"; then
     echo "✅ App is running and healthy!"
 else
-    echo "⚠️ WARNING: Health check failed — check /tmp/myapp.log"
+    echo "⚠️ WARNING: Health check failed — check logs at $LOG_FILE"
 fi
 
 echo "Deploy complete!"
