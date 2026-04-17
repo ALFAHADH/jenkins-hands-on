@@ -6,7 +6,7 @@ pipeline {
         DEPLOY_USER = 'deployuser'
         DEPLOY_HOST = '172.31.12.148'
         DEPLOY_DIR  = '/opt/myapp'
-        SSH_CRED_ID = 'deployuser'
+        SSH_CRED_ID = 'deploy-server-ssh'
     }
 
     stages {
