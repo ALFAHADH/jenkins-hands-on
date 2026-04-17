@@ -13,7 +13,6 @@ mkdir -p $APP_DIR
 mkdir -p $APP_DIR/app
 
 echo "[2/4] Copying application files..."
-cp -r app/ $APP_DIR/
 cp scripts/build.sh $APP_DIR/ 2>/dev/null || true
 
 echo "[3/4] Installing dependencies..."
