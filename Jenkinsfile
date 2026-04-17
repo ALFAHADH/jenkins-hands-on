@@ -23,30 +23,36 @@ pipeline {
         }
 
         // ─────────────────────────────
-        // STAGE 2: SETUP PYTHON (FIX)
+        // STAGE 2: SETUP DEPENDENCIES
         // ─────────────────────────────
-        stage('Setup Python') {
+        stage('Setup Dependencies') {
             steps {
                 sh '''
                 set -e
 
-                echo "Checking if python3-venv is available..."
+                echo "==== INSTALLING REQUIRED PACKAGES ===="
 
+                # Update package list once
+                sudo apt update
+
+                # Install python venv if missing
                 if ! python3 -m venv testenv 2>/dev/null; then
-                    echo "python3-venv missing. Installing..."
-
-                    if command -v sudo >/dev/null 2>&1; then
-                        sudo apt update
-                        sudo apt install -y python3-venv
-                    else
-                        echo "ERROR: sudo not available. Install python3-venv manually."
-                        exit 1
-                    fi
+                    echo "[FIX] Installing python3-venv..."
+                    sudo apt install -y python3-venv
                 else
-                    echo "python3-venv already installed."
+                    echo "[OK] python3-venv already installed"
+                fi
+                rm -rf testenv
+
+                # Install zip if missing
+                if ! command -v zip >/dev/null 2>&1; then
+                    echo "[FIX] Installing zip..."
+                    sudo apt install -y zip
+                else
+                    echo "[OK] zip already installed"
                 fi
 
-                rm -rf testenv
+                echo "==== SETUP COMPLETE ===="
                 '''
             }
         }
@@ -91,29 +97,29 @@ pipeline {
                 sshagent(credentials: [SSH_CRED_ID]) {
 
                     sh """
-                        echo "Copying files to ${DEPLOY_HOST}..."
-
-                        ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST} \
-                        'mkdir -p ${DEPLOY_DIR}'
-
-                        scp -o StrictHostKeyChecking=no -r app/ scripts/ requirements.txt \
-                        ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/
+                    echo "Creating directory on remote server..."
+                    ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST} \
+                    'mkdir -p ${DEPLOY_DIR}'
                     """
 
                     sh """
-                        echo "Running deploy script..."
-
-                        ssh -o StrictHostKeyChecking=no \
-                        ${DEPLOY_USER}@${DEPLOY_HOST} \
-                        'cd ${DEPLOY_DIR} && chmod +x scripts/deploy.sh && bash scripts/deploy.sh'
+                    echo "Copying files to server..."
+                    scp -o StrictHostKeyChecking=no -r app/ scripts/ requirements.txt \
+                    ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}/
                     """
 
                     sh """
-                        echo "Verifying deployment..."
+                    echo "Running deploy script..."
+                    ssh -o StrictHostKeyChecking=no \
+                    ${DEPLOY_USER}@${DEPLOY_HOST} \
+                    'cd ${DEPLOY_DIR} && chmod +x scripts/deploy.sh && bash scripts/deploy.sh'
+                    """
 
-                        ssh -o StrictHostKeyChecking=no \
-                        ${DEPLOY_USER}@${DEPLOY_HOST} \
-                        'curl -s http://localhost:5000/health || echo "Health check failed"'
+                    sh """
+                    echo "Verifying deployment..."
+                    ssh -o StrictHostKeyChecking=no \
+                    ${DEPLOY_USER}@${DEPLOY_HOST} \
+                    'curl -s http://localhost:5000/health || echo "Health check failed"'
                     """
                 }
             }
